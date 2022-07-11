@@ -1,76 +1,130 @@
 import asyncio
 from collections import deque
+from contextlib import suppress
 import signal
 import time
 import datetime
 import pydub
 import pulsectl_asyncio as pulsectl
 
+class NoRecordingException(Exception):
+    pass
 
-async def pulseaudio_listen():
-    # TODO: reconnect on error (e.g. PulseDisconnect)
-    async with pulsectl.PulseAsync() as pulse:
-        async for event in pulse.subscribe_events('server'):
-            server_info = await pulse.server_info()
-            print(server_info.default_sink_name,
-                  server_info.default_source_name)
-            # TODO: when the default sink or source changes,
-            # switch recording the new one while piping to the same buffer
-            # TODO: investigate latency overhead of switching
+
+class PulseaudioRecorder:
+    def __init__(self, device: str, buffer_seconds=60, bytes_per_sample=2, channels=1, sampling_rate=44100, latency_msec=1000):
+        self.recording = False
+        self.device = device
+        self.parec_args = [
+            f'--channels={channels}',
+            f'--rate={sampling_rate}',
+            f'--latency-msec={latency_msec}']
+
+        bytes_per_second = bytes_per_sample * channels * sampling_rate
+
+        class PulseaudioRecordProtocol(asyncio.SubprocessProtocol):
+            buffer = deque(maxlen=bytes_per_second*buffer_seconds)
+            last_updated_timestamp = 0.0
+
+            def connection_made(self, transport):
+                with suppress(AttributeError):
+                    self.on_connection_made()
+
+            def connection_lost(self, exc):
+                with suppress(AttributeError):
+                    self.on_connection_lost()
+
+            def pipe_data_received(self, fd, data):
+                self.last_updated_timestamp = time.time()
+                self.buffer.extend(data)
+
+            async def get_recording(self):
+                timestamp = time.time()
+                while timestamp >= self.last_updated_timestamp:
+                    await asyncio.sleep(latency_msec * 0.001)
+
+                truncate_bytes = bytes_per_sample * \
+                    int(sampling_rate*channels *
+                        (self.last_updated_timestamp - timestamp))
+
+                return \
+                    pydub.AudioSegment(
+                        bytes(self.buffer)[:-truncate_bytes],
+                        sample_width=bytes_per_sample,
+                        frame_rate=sampling_rate,
+                        channels=1), \
+                    datetime.datetime.fromtimestamp(timestamp).isoformat()
+
+        self.protocol_factory = PulseaudioRecordProtocol
+
+    def on_connection_lost(self):
+        self.recording = False
+
+    async def start(self):
+        self.transport, self.protocol = await asyncio.get_running_loop().subprocess_exec(
+            self.protocol_factory,
+            'parec', f'--device={self.device}', *self.parec_args)
+        self.protocol.on_connection_lost = self.on_connection_lost
+        self.recording = True
+        print(id(self.protocol), id(self.protocol.buffer))
+
+    async def switch_to(self, device: str):
+        self.stop()
+        self.device = device
+        await self.start()
+
+    def stop(self):
+        if self.recording:
+            self.transport.kill()
+            self.recording = False
+
+    async def get_recording(self):
+        if self.recording:
+            return await self.protocol.get_recording()
+        else:
+            raise NoRecordingException
 
 
 async def main():
-    # TODO: [argparse] configure buffer_seconds and sampling settings
-    # TODO: add option to export both audio tracks (default source and sink) merged
+    async with pulsectl.PulseAsync() as pulse:
+        async def get_default_sink_source():
+            server_info = await pulse.server_info()
+            return f'{server_info.default_sink_name}.monitor', server_info.default_source_name
 
-    bytes_per_sample = 2  # parecord default is s16ne (16-bit)
-    channels = 1
-    sampling_rate = 44100
+        default_sink, default_source = await get_default_sink_source()
 
-    bytes_per_second = bytes_per_sample * channels * sampling_rate
+        sink_recorder = PulseaudioRecorder(default_sink)
+        await sink_recorder.start()
 
-    buffer_seconds = 60
-    buffer = deque(maxlen=bytes_per_second*buffer_seconds)
+        source_recorder = PulseaudioRecorder(default_source)
+        await source_recorder.start()
 
-    buffer_request_timestamp = None
+        async def save_sink_recording():
+            audio, timestamp = await sink_recorder.get_recording()
+            audio.export(f'sink-recording-{timestamp}.ogg', format='ogg')
+        asyncio.get_running_loop().add_signal_handler(
+            signal.SIGUSR1, lambda: asyncio.create_task(save_sink_recording()))
 
-    # TODO: extract signaling and add option for socket.io client
-    def signal_handler(signum, frame):
-        nonlocal buffer_request_timestamp
-        buffer_request_timestamp = time.time()
-    signal.signal(signal.SIGUSR1, signal_handler)
+        async def save_source_recording():
+            audio, timestamp = await source_recorder.get_recording()
+            audio.export(f'source-recording-{timestamp}.ogg', format='ogg')
+        asyncio.get_running_loop().add_signal_handler(
+            signal.SIGUSR2, lambda: asyncio.create_task(save_source_recording()))
 
-    class PulseaudioRecordProtocol(asyncio.SubprocessProtocol):
-        def pipe_data_received(self, fd, data):
-            last_updated_timestamp = time.time()
-            buffer.extend(data)
+        async for event in pulse.subscribe_events('server'):
+            new_default_sink, new_default_source = await get_default_sink_source()
 
-            nonlocal buffer_request_timestamp
-            if buffer_request_timestamp:
-                truncate_bytes = bytes_per_sample * \
-                    int(sampling_rate*channels *
-                        (last_updated_timestamp - buffer_request_timestamp))
-                pydub.AudioSegment(
-                    bytes(buffer)[:-truncate_bytes],
-                    sample_width=bytes_per_sample,
-                    frame_rate=sampling_rate,
-                    channels=1,
-                ).export(f'recording-{datetime.datetime.fromtimestamp(buffer_request_timestamp).isoformat()}.wav', format='wav')
-                buffer_request_timestamp = None
+            if default_sink != new_default_sink:
+                await sink_recorder.switch_to(new_default_sink)
+                default_sink = new_default_sink
 
-    # TODO: adapt for target device changes, run two concurrently (make nonlocal vars fields of protocol impl.)
-    await loop.subprocess_exec(
-        PulseaudioRecordProtocol,
-        'parecord',
-        '--device=@DEFAULT_SINK@.monitor',
-        f'--channels={channels}',
-        f'--rate={sampling_rate}',
-        '--latency-msec=1000',
-        '--raw',
-    )
+            if default_source != new_default_source:
+                await source_recorder.switch_to(new_default_source)
+                default_source = new_default_source
 
-loop = asyncio.get_event_loop()
-loop.run_until_complete(main())
-loop.run_until_complete(pulseaudio_listen())
-loop.run_forever()
-# TODO: graceful shutdown, idiomatic coroutine launching
+try:
+    asyncio.run(main())
+except KeyboardInterrupt:
+    pass
+
+# TODO: configure params and save location
