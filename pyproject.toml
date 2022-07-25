@@ -8,6 +8,8 @@ authors = ["Alex <sashoism@pm.me>"]
 python = "^3.10"
 pydub = "^0.25.1"
 pulsectl-asyncio = "^0.2.3"
+python-socketio = {extras = ["asyncio_client"], version = "^5.7.1"}
+toml = "^0.10.2"
 
 [tool.poetry.dev-dependencies]
 
