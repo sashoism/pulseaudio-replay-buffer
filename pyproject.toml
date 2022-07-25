@@ -7,7 +7,7 @@ authors = ["Alex <sashoism@pm.me>"]
 [tool.poetry.dependencies]
 python = "^3.10"
 pydub = "^0.25.1"
-pulsectl-asyncio = "^0.2.3"
+pulsectl = "^22.3.2"
 
 [tool.poetry.dev-dependencies]
 

@@ -7,17 +7,6 @@ optional = false
 python-versions = "*"
 
 [[package]]
-name = "pulsectl-asyncio"
-version = "0.2.3"
-description = "Asyncio frontend for the pulsectl Python bindings of libpulse"
-category = "main"
-optional = false
-python-versions = "~=3.6"
-
-[package.dependencies]
-pulsectl = ">=21.10.2,<=22.3.2"
-
-[[package]]
 name = "pydub"
 version = "0.25.1"
 description = "Manipulate audio with an simple and easy high level interface"
@@ -28,16 +17,12 @@ python-versions = "*"
 [metadata]
 lock-version = "1.1"
 python-versions = "^3.10"
-content-hash = "41edeebf79216670642cbe9f0cd7bf456b6672c2f75e319feb26e65c9968a83d"
+content-hash = "a8bc460c11547ca86bfb1187908233be93b07dce4ade6fb27fa3bfe2d0544a0d"
 
 [metadata.files]
 pulsectl = [
     {file = "pulsectl-22.3.2-py2.py3-none-any.whl", hash = "sha256:6fded96a8e6a9ac6c387ed3a9bdb1afb20d80256b0c9df4b98b58461d74ba0c4"},
     {file = "pulsectl-22.3.2.tar.gz", hash = "sha256:cc174e1ceebd4e6222c5b78f4f415f12e80753c9ab75ab354159b4cb5950b084"},
-]
-pulsectl-asyncio = [
-    {file = "pulsectl-asyncio-0.2.3.tar.gz", hash = "sha256:68e8c9efd5ca366bb9c5dbc7284bfa7a2250fc02279407c8c56994a5206bfcd1"},
-    {file = "pulsectl_asyncio-0.2.3-py3-none-any.whl", hash = "sha256:edf300852ae23164521dece8a60cc643014dbe38b56662b30a9711b0d9a0392d"},
 ]
 pydub = [
     {file = "pydub-0.25.1-py2.py3-none-any.whl", hash = "sha256:65617e33033874b59d87db603aa1ed450633288aefead953b30bded59cb599a6"},

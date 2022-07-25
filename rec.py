@@ -5,7 +5,7 @@ import signal
 import time
 import datetime
 import pydub
-import pulsectl_asyncio as pulsectl
+import pulsectl
 
 class NoRecordingException(Exception):
     pass
@@ -86,12 +86,19 @@ class PulseaudioRecorder:
 
 
 async def main():
-    async with pulsectl.PulseAsync() as pulse:
-        async def get_default_sink_source():
-            server_info = await pulse.server_info()
+    async def subscribe_server_events():
+        proc = await asyncio.create_subprocess_exec('pactl', 'subscribe', stdout=asyncio.subprocess.PIPE)
+        while True:
+            event = (await proc.stdout.readline()).decode().rstrip()
+            if 'on server' in event:
+                yield event
+    
+    with pulsectl.Pulse() as pulse:
+        def get_default_sink_source():
+            server_info = pulse.server_info()
             return f'{server_info.default_sink_name}.monitor', server_info.default_source_name
 
-        default_sink, default_source = await get_default_sink_source()
+        default_sink, default_source = get_default_sink_source()
 
         sink_recorder = PulseaudioRecorder(default_sink)
         await sink_recorder.start()
@@ -111,8 +118,8 @@ async def main():
         asyncio.get_running_loop().add_signal_handler(
             signal.SIGUSR2, lambda: asyncio.create_task(save_source_recording()))
 
-        async for event in pulse.subscribe_events('server'):
-            new_default_sink, new_default_source = await get_default_sink_source()
+        async for event in subscribe_server_events():
+            new_default_sink, new_default_source = get_default_sink_source()
 
             if default_sink != new_default_sink:
                 await sink_recorder.switch_to(new_default_sink)
